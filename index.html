@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#ffffff">
+<title>画像メモ</title>
+<style>
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 20px; background: #f6f6f6;
+  color: #222; font-family: sans-serif;
+}
+main { max-width: 850px; margin: auto; }
+h1 { font-size: 25px; margin-bottom: 5px; }
+p { color: #666; font-size: 14px; }
+#drop {
+  margin: 22px 0; padding: 35px 12px; text-align: center;
+  background: white; border: 2px dashed #bbb; border-radius: 12px;
+}
+button, .pick {
+  border: 0; border-radius: 8px; padding: 11px 16px;
+  background: #222; color: white; font-size: 14px;
+  cursor: pointer; display: inline-block;
+}
+#files { display: none; }
+#status { margin: 10px 0; font-size: 13px; color: #666; }
+#gallery {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.item {
+  background: white; padding: 7px; border-radius: 10px;
+  min-width: 0; overflow: hidden;
+}
+.item img {
+  display: block; width: 100%; height: auto;
+  max-height: 380px; object-fit: contain; border-radius: 6px;
+}
+.meta {
+  font-size: 11px; color: #777; margin: 8px 2px;
+  overflow-wrap: anywhere;
+}
+.del { background: #eee; color: #333; padding: 7px 10px; }
+.empty { grid-column: 1 / -1; text-align: center; padding: 30px; }
+@media (min-width: 600px) {
+  #gallery { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+</style>
+</head>
+<body>
+<main>
+  <h1>画像メモ</h1>
+  <p>画像を入れるだけ。自動で保存されます。</p>
+
+  <div id="drop">
+    <p>ここに画像を放り込む</p>
+    <label class="pick" for="files">画像を選ぶ</label>
+    <input id="files" type="file" accept="image/*" multiple>
+  </div>
+
+  <div id="status">記録を読み込み中…</div>
+  <div id="gallery"></div>
+</main>
+
+<script>
+const DB_NAME = 'image-memo-db';
+let db;
+
+function openDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => {
+      req.result.createObjectStore('images', {keyPath: 'id'});
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function allImages() {
+  return new Promise((resolve, reject) => {
+    const req = db.transaction('images').objectStore('images').getAll();
+    req.onsuccess = () => resolve(req.result.sort((a,b) => b.id-a.id));
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function saveImage(record) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('images', 'readwrite');
+    tx.objectStore('images').put(record);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+function deleteImage(id) {
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('images', 'readwrite');
+    tx.objectStore('images').delete(id);
+    tx.oncomplete = resolve;
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function addFiles(fileList) {
+  const files = [...fileList].filter(f => f.type.startsWith('image/'));
+  if (!files.length) return;
+
+  const status = document.getElementById('status');
+  for (const file of files) {
+    status.textContent = '保存中… ' + file.name;
+    try {
+      await saveImage({
+        id: Date.now() + Math.random(),
+        name: file.name,
+        date: new Date().toLocaleString('ja-JP'),
+        blob: file
+      });
+    } catch (e) {
+      alert('保存できませんでした。空き容量を確認してください。');
+      break;
+    }
+  }
+  document.getElementById('files').value = '';
+  await render();
+}
+
+async function render() {
+  const gallery = document.getElementById('gallery');
+  const records = await allImages();
+  gallery.replaceChildren();
+
+  document.getElementById('status').textContent =
+    '記録 ' + records.length + ' 枚';
+
+  if (!records.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'まだ画像がありません';
+    gallery.append(empty);
+    return;
+  }
+
+  for (const record of records) {
+    const card = document.createElement('article');
+    card.className = 'item';
+
+    const img = document.createElement('img');
+    const url = URL.createObjectURL(record.blob);
+    img.src = url;
+    img.alt = record.name;
+    img.loading = 'lazy';
+    img.onload = () => URL.revokeObjectURL(url);
+
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = record.date + ' · ' + record.name;
+
+    const del = document.createElement('button');
+    del.className = 'del';
+    del.textContent = '削除';
+    del.onclick = async () => {
+      if (confirm('この画像を削除する？')) {
+        await deleteImage(record.id);
+        await render();
+      }
+    };
+
+    card.append(img, meta, del);
+    gallery.append(card);
+  }
+}
+
+document.getElementById('files').addEventListener('change', e => {
+  addFiles(e.target.files);
+});
+
+const drop = document.getElementById('drop');
+drop.addEventListener('dragover', e => {
+  e.preventDefault();
+  drop.style.borderColor = '#222';
+});
+drop.addEventListener('dragleave', () => {
+  drop.style.borderColor = '#bbb';
+});
+drop.addEventListener('drop', e => {
+  e.preventDefault();
+  drop.style.borderColor = '#bbb';
+  addFiles(e.dataTransfer.files);
+});
+
+(async () => {
+  try {
+    db = await openDB();
+    await render();
+  } catch (e) {
+    document.getElementById('status').textContent =
+      'データベースを開けませんでした。ブラウザを確認してください。';
+  }
+})();
+</script>
+</body>
+</html>
